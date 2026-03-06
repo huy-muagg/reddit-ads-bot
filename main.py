@@ -177,7 +177,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        print("LỖI: Thiếu TELEGRAM_BOT_TOKEN")
+        logger.error("LỖI: Thiếu TELEGRAM_BOT_TOKEN")
         return
 
     request_config = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0, http_version="1.1")
@@ -190,19 +190,20 @@ async def main():
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), monitor_messages))
     application.add_error_handler(error_handler)
 
-    # Chạy đồng thời Health Check Server và Bot Polling
-    await asyncio.gather(
-        start_health_check_server(),
-        application.initialize(),
-        application.start(),
-        application.updater.start_polling(drop_pending_updates=True)
-    )
-    # Giữ ứng dụng chạy
-    while True:
-        await asyncio.sleep(1000)
+    # Khởi động Health Check Server trước
+    await start_health_check_server()
+
+    # Khởi động Bot theo trình tự chuẩn
+    async with application:
+        await application.start()
+        await application.updater.start_polling(drop_pending_updates=True)
+        logger.info("Bot đã bắt đầu nhận tin nhắn (Polling)...")
+        # Giữ ứng dụng chạy
+        while True:
+            await asyncio.sleep(3600)
 
 if __name__ == '__main__':
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         pass
