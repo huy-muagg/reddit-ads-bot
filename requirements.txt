@@ -1,5 +1,5 @@
 google-genai
-python-dotenv echo feedparser echo python-telegram-bot[job-queue] echo aiohttp
-python-dotenv echo feedparser echo python-telegram-bot[job-queue] echo aiohttp
-python-dotenv echo feedparser echo python-telegram-bot[job-queue] echo aiohttp
-python-dotenv echo feedparser echo python-telegram-bot[job-queue] echo aiohttp
+python-dotenv
+feedparser
+python-telegram-bot[job-queue]
+aiohttp
