@@ -8,6 +8,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from telegram.request import HTTPXRequest
 from dotenv import load_dotenv
+from aiohttp import web
 
 from reddit_monitor import RedditMonitor
 from ai_generator import AIGenerator
@@ -18,7 +19,7 @@ load_dotenv()
 # Đường dẫn file lưu trữ
 DATA_FILE = "processed_posts.json"
 
-# Cấu hình log chi tiết hơn
+# Cấu hình log
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -46,17 +47,28 @@ processed_posts = load_processed_posts()
 post_cache = {}
 
 def split_text(text, limit=4000):
-    """Chia nhỏ văn bản nếu vượt quá giới hạn ký tự của Telegram."""
     if not text: return []
     return [text[i:i+limit] for i in range(0, len(text), limit)]
+
+# --- HEALTH CHECK SERVER FOR RENDER ---
+async def handle_health_check(request):
+    return web.Response(text="Reddit Ads Bot is Online!")
+
+async def start_health_check_server():
+    app = web.Application()
+    app.add_routes([web.get('/', handle_health_check)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    logger.info(f"Khởi động Health Check Server tại cổng {port}")
+    await site.start()
 
 async def monitor_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not update.message or not update.message.text: return
     text = update.message.text
-    logger.info(f">>> NHẬN TIN NHẮN TỪ {user.first_name} (ID: {user.id}): {text}")
     
-    # THƯỜNG HỢP 1: Tin nhắn là link Reddit
     if "reddit.com" in text:
         url_match = re.search(r'(https?://(?:www\.)?reddit\.com/r/[^/\s]+/comments/[^/\s]+(?:/[^/\s]*)?)', text)
         if url_match:
@@ -69,19 +81,14 @@ async def monitor_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                             reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
             return
 
-    # TRƯỜNG HỢP 2: Chat tự do với AI
-    # Đang trong quá trình gõ lệnh hoặc dán link thì bỏ qua, còn lại là chat
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     ai_response = await ai.chat_with_ai(text)
-    
-    # Chia nhỏ tin nhắn nếu phản hồi quá dài
-    parts = split_text(ai_response)
-    for part in parts:
+    for part in split_text(ai_response):
         await update.message.reply_text(part)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    await update.message.reply_text("🚀 Reddit Marketing Bot (v4 - AI Chat Integration)\n\n"
+    await update.message.reply_text("🚀 Reddit Marketing Bot (v4.1 - Cloud Ready)\n\n"
                                     "🕹️ Chức năng:\n"
                                     "• Dán link Reddit để tóm tắt và tạo cmt.\n"
                                     "• Nhắn tin bất kỳ để chat trực tiếp với AI.\n"
@@ -143,15 +150,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tool_id, url_id = data[1], data[2]
         url = post_cache.get(f"url_{url_id}")
         if not url: return
-        
         progress_msg = await query.edit_message_text(f"⏳ [███░░░░░░░] 30% - Đang đọc bài & comment...")
         details = reddit.fetch_post_details(url)
         if details:
             await progress_msg.edit_text(f"⏳ [██████░░░░] 60% - Đang tóm tắt & phân tích AI...")
             summary = await ai.generate_summary(details['title'], details['content'])
             await query.message.reply_text(f"📌 *THÔNG TIN BÀI VIẾT:*\n\n{summary}", parse_mode='Markdown')
-            
-            await progress_msg.edit_text(f"⏳ [█████████░] 90% - Đang soạn thảo gợi ý...")
             suggestions = await ai.generate_comment(tool_id, f"{details['title']}\n{details['content']}", details['top_comments'])
             await progress_msg.edit_text(f"✅ [██████████] 100% - Hoàn tất!")
             for part in split_text(f"✅ GỢI Ý CHO {tool_id.upper()}\n\n{suggestions}"):
@@ -170,14 +174,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"Lỗi: {context.error}")
 
-if __name__ == '__main__':
+async def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        print("LỖI: Thiếu TELEGRAM_BOT_TOKEN")
+        return
+
     request_config = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0, http_version="1.1")
     application = ApplicationBuilder().token(token).request(request_config).build()
+    
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('scan', scan))
     application.add_handler(CommandHandler('create_post', create_post))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), monitor_messages))
     application.add_error_handler(error_handler)
-    application.run_polling(drop_pending_updates=True)
+
+    # Chạy đồng thời Health Check Server và Bot Polling
+    await asyncio.gather(
+        start_health_check_server(),
+        application.initialize(),
+        application.start(),
+        application.updater.start_polling(drop_pending_updates=True)
+    )
+    # Giữ ứng dụng chạy
+    while True:
+        await asyncio.sleep(1000)
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

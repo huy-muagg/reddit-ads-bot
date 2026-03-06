@@ -4,3 +4,4 @@ python-dotenv
 aiohttp
 feedparser
 beautifulsoup4
+aiohttp
