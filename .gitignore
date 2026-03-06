@@ -2,3 +2,7 @@
 __pycache__/
 *.log
 .venv/
+processed_posts.json
+nohup.out
+test_write.txt
+bot_*.log
